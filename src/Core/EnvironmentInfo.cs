@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-
+ 
 namespace Core;
 
 public sealed record EnvironmentReport(
