@@ -1,96 +1,123 @@
-﻿/*using Core;
-
-EnvironmentReport report = EnvironmentInfo.Collect();
-
-Console.WriteLine("CrossApp — інформація про середовище");
-Console.WriteLine(new string('-', 52));
-Console.WriteLine($"ОС                 : {report.OsDescription}");
-Console.WriteLine($"Runtime            : {report.FrameworkDescription}");
-Console.WriteLine($"Архітектура        : {report.ProcessArchitecture}");
-Console.WriteLine($"RID (визначено)    : {report.DetectedRid}");
-Console.WriteLine($"RID (від .NET)     : {report.ReportedRid}");
-Console.WriteLine($"Каталог            : {report.BaseDirectory}");
-Console.WriteLine($"Цільова збірка Core: {report.BuildNote}");
-*/
-
-using System.Globalization;
+﻿using System;
 using System.Text;
+using Core.Domain;
 using Core.Dto;
-using Core.Import;
 
 Console.OutputEncoding = Encoding.UTF8;
 
-string path = args.Length > 0
-    ? args[0]
-    : Path.Combine("data", "sample.csv");
+Console.WriteLine("=== Сценарій 1: успіх ===");
 
-try
+Order order = Order.Create("ORD-001", "C-001");
+
+Console.WriteLine($"Створено: {order}");
+
+order.AddLine("P-001", "Клавіатура", 800m, 2);
+order.AddLine("P-002", "Миша", 400m, 1);
+
+Console.WriteLine();
+PrintOrder(order);
+
+order.Confirm();
+
+Console.WriteLine();
+Console.WriteLine($"Після підтвердження: {order}");
+
+Console.WriteLine();
+Console.WriteLine("=== Перетворення в DTO та назад ===");
+
+OrderDto dto = order.ToDto();
+Order restored = Order.FromDto(dto);
+
+PrintOrder(restored);
+
+Console.WriteLine();
+Console.WriteLine("=== Сценарій 2: порушення інваріантів ===");
+
+int linesBefore = order.Lines.Count;
+decimal totalBefore = order.Total;
+bool confirmedBefore = order.IsConfirmed;
+
+TryDo(
+    "Додавання до підтвердженого замовлення",
+    () => order.AddLine("P-003", "Монітор", 5000m, 1));
+
+TryDo(
+    "Повторне підтвердження",
+    () => order.Confirm());
+
+TryDo(
+    "Порожній номер",
+    () => Order.Create(" ", "C-002"));
+
+Order draft = Order.Create("ORD-002", "C-002");
+
+TryDo(
+    "Нульова кількість",
+    () => draft.AddLine("P-004", "Навушники", 600m, 0));
+
+TryDo(
+    "Від'ємна ціна",
+    () => draft.AddLine("P-004", "Навушники", -600m, 1));
+
+TryDo(
+    "Порожній ідентифікатор товару",
+    () => draft.AddLine(" ", "Навушники", 600m, 1));
+
+TryDo(
+    "Підтвердження порожнього замовлення",
+    () => draft.Confirm());
+
+TryDo(
+    "Відновлення підтвердженого замовлення без рядків",
+    () => Order.FromDto(
+        new OrderDto(
+            "ORD-003",
+            "C-003",
+            true,
+            Array.Empty<OrderLineDto>())));
+
+Console.WriteLine();
+Console.WriteLine("=== Перевірка стану після відмов ===");
+
+Console.WriteLine(
+    $"Рядків: було {linesBefore}, стало {order.Lines.Count}");
+
+Console.WriteLine(
+    $"Сума: була {totalBefore:F2}, стала {order.Total:F2}");
+
+Console.WriteLine(
+    $"Підтвердження: було {confirmedBefore}, " +
+    $"стало {order.IsConfirmed}");
+
+Console.WriteLine(
+    $"Чернетка: рядків {draft.Lines.Count}, " +
+    $"підтверджена {draft.IsConfirmed}");
+
+static void PrintOrder(Order order)
 {
-    string fullPath = Path.GetFullPath(path);
+    Console.WriteLine(order);
 
-    if (!File.Exists(fullPath))
+    foreach (OrderLine line in order.Lines)
     {
         Console.WriteLine(
-            $"Файл не знайдено: {fullPath}");
-
-        return 1;
+            $"  {line.ProductId}: {line.Name}; " +
+            $"{line.Quantity} × {line.Price:F2} грн " +
+            $"= {line.Subtotal:F2} грн");
     }
+}
 
-    ImportResult<ProductDto> result =
-        ProductCsvImporter.Load(fullPath);
-
-    Console.WriteLine(
-        $"Завантажено записів: {result.Items.Count}");
-
-    Console.WriteLine("Перші записи:");
-
-    foreach (ProductDto product in result.Items.Take(5))
+static void TryDo(string title, Action action)
+{
+    try
     {
-        string price = product.Price.ToString(
-            "F2",
-            CultureInfo.InvariantCulture);
+        action();
 
         Console.WriteLine(
-            $"{product.Id,-6} " +
-            $"{product.Name,-22} " +
-            $"{price,10} грн");
+            $"{title}: очікуваний виняток НЕ виник!");
     }
-
-    Console.WriteLine(
-        $"Пропущено рядків: {result.Errors.Count}");
-
-    foreach (string error in result.Errors)
+    catch (Exception ex)
     {
-        Console.WriteLine($" ! {error}");
+        Console.WriteLine(
+            $"{title}: {ex.GetType().Name} — {ex.Message}");
     }
-
-    return 0;
-}
-catch (UnauthorizedAccessException)
-{
-    Console.WriteLine(
-        "Немає дозволу на читання файлу.");
-
-    return 1;
-}
-catch (IOException exception)
-{
-    Console.WriteLine(
-        $"Не вдалося прочитати файл: {exception.Message}");
-
-    return 1;
-}
-catch (ArgumentException)
-{
-    Console.WriteLine(
-        "Шлях до файлу має неправильний формат.");
-
-    return 1;
-}
-catch (NotSupportedException)
-{
-    Console.WriteLine(
-        "Формат шляху до файлу не підтримується.");
-
-    return 1;
 }
