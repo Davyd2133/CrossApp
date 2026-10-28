@@ -1,123 +1,250 @@
 ﻿using System;
+using System.Globalization;
+using System.IO;
 using System.Text;
-using Core.Domain;
-using Core.Dto;
+using Cli.Stores;
+using Core.Events;
+using Core.Interfaces;
+using Core.Services;
 
 Console.OutputEncoding = Encoding.UTF8;
 
-Console.WriteLine("=== Сценарій 1: успіх ===");
+var culture = CultureInfo.GetCultureInfo("uk-UA");
 
-Order order = Order.Create("ORD-001", "C-001");
+CultureInfo.CurrentCulture = culture;
+CultureInfo.CurrentUICulture = culture;
 
-Console.WriteLine($"Створено: {order}");
+// 1. Вибір сховища.
 
-order.AddLine("P-001", "Клавіатура", 800m, 2);
-order.AddLine("P-002", "Миша", 400m, 1);
+bool useJson = Array.Exists(
+    args,
+    argument => string.Equals(
+        argument,
+        "--json",
+        StringComparison.OrdinalIgnoreCase));
 
-Console.WriteLine();
-PrintOrder(order);
+IOrderStore store;
 
-order.Confirm();
-
-Console.WriteLine();
-Console.WriteLine($"Після підтвердження: {order}");
-
-Console.WriteLine();
-Console.WriteLine("=== Перетворення в DTO та назад ===");
-
-OrderDto dto = order.ToDto();
-Order restored = Order.FromDto(dto);
-
-PrintOrder(restored);
-
-Console.WriteLine();
-Console.WriteLine("=== Сценарій 2: порушення інваріантів ===");
-
-int linesBefore = order.Lines.Count;
-decimal totalBefore = order.Total;
-bool confirmedBefore = order.IsConfirmed;
-
-TryDo(
-    "Додавання до підтвердженого замовлення",
-    () => order.AddLine("P-003", "Монітор", 5000m, 1));
-
-TryDo(
-    "Повторне підтвердження",
-    () => order.Confirm());
-
-TryDo(
-    "Порожній номер",
-    () => Order.Create(" ", "C-002"));
-
-Order draft = Order.Create("ORD-002", "C-002");
-
-TryDo(
-    "Нульова кількість",
-    () => draft.AddLine("P-004", "Навушники", 600m, 0));
-
-TryDo(
-    "Від'ємна ціна",
-    () => draft.AddLine("P-004", "Навушники", -600m, 1));
-
-TryDo(
-    "Порожній ідентифікатор товару",
-    () => draft.AddLine(" ", "Навушники", 600m, 1));
-
-TryDo(
-    "Підтвердження порожнього замовлення",
-    () => draft.Confirm());
-
-TryDo(
-    "Відновлення підтвердженого замовлення без рядків",
-    () => Order.FromDto(
-        new OrderDto(
-            "ORD-003",
-            "C-003",
-            true,
-            Array.Empty<OrderLineDto>())));
-
-Console.WriteLine();
-Console.WriteLine("=== Перевірка стану після відмов ===");
-
-Console.WriteLine(
-    $"Рядків: було {linesBefore}, стало {order.Lines.Count}");
-
-Console.WriteLine(
-    $"Сума: була {totalBefore:F2}, стала {order.Total:F2}");
-
-Console.WriteLine(
-    $"Підтвердження: було {confirmedBefore}, " +
-    $"стало {order.IsConfirmed}");
-
-Console.WriteLine(
-    $"Чернетка: рядків {draft.Lines.Count}, " +
-    $"підтверджена {draft.IsConfirmed}");
-
-static void PrintOrder(Order order)
+if (useJson)
 {
-    Console.WriteLine(order);
+    string dataPath = Path.Combine(
+        AppContext.BaseDirectory,
+        "data",
+        "orders.json");
 
-    foreach (OrderLine line in order.Lines)
-    {
-        Console.WriteLine(
-            $"  {line.ProductId}: {line.Name}; " +
-            $"{line.Quantity} × {line.Price:F2} грн " +
-            $"= {line.Subtotal:F2} грн");
-    }
+    store = new JsonOrderStore(dataPath);
+
+    Console.WriteLine("Сховище: JSON");
+}
+else
+{
+    store = new InMemoryOrderStore();
+
+    Console.WriteLine("Сховище: у пам'яті");
 }
 
-static void TryDo(string title, Action action)
+var service = new OrderService(store);
+
+// 2. Підготовка журналу.
+
+string logPath = Path.Combine(
+    AppContext.BaseDirectory,
+    "logs",
+    "app.log");
+
+Directory.CreateDirectory(
+    Path.GetDirectoryName(logPath)!);
+
+Console.WriteLine($"Файл журналу: {logPath}");
+
+// 3. Перший підписник: консоль і файл.
+
+void OnOrderChanged(
+    object? sender,
+    OrderChangedEventArgs e)
 {
+    string line =
+        $"{e.At:HH:mm:ss} {e.Kind,-14} " +
+        $"OrderId={e.OrderId}; " +
+        $"позицій={e.LinesCount}; " +
+        $"нова сума={e.Total:F2} грн";
+
+    Console.WriteLine($"[1: журнал] {line}");
+
     try
     {
-        action();
-
-        Console.WriteLine(
-            $"{title}: очікуваний виняток НЕ виник!");
+        File.AppendAllText(
+            logPath,
+            line + Environment.NewLine);
     }
-    catch (Exception ex)
+    catch (IOException ex)
     {
-        Console.WriteLine(
-            $"{title}: {ex.GetType().Name} — {ex.Message}");
+        Console.Error.WriteLine(
+            $"Не вдалося записати журнал: {ex.Message}");
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        Console.Error.WriteLine(
+            $"Немає доступу до журналу: {ex.Message}");
     }
 }
+
+// 4. Другий підписник: лямбда із замиканням.
+
+int changes = 0;
+
+EventHandler<OrderChangedEventArgs> counterHandler = (_, e) =>
+{
+    changes++;
+
+    Console.WriteLine(
+        $"[2: лічильник] {e.Kind}; подій отримано: {changes}");
+};
+
+// Порядок підписки визначає порядок виклику.
+
+service.Changed += OnOrderChanged;
+service.Changed += counterHandler;
+
+// 5. Успішні операції.
+
+Console.WriteLine("\n--- Створення замовлення ---");
+
+var created = service.Create();
+
+Console.WriteLine("\n--- Додавання першої позиції ---");
+
+service.AddLine(
+    created.Id,
+    "Клавіатура",
+    800m,
+    1);
+
+Console.WriteLine("\n--- Додавання другої позиції ---");
+
+service.AddLine(
+    created.Id,
+    "Миша",
+    400m,
+    2);
+
+Console.WriteLine($"\nПодій отримано: {changes}");
+
+// 6. Помилка інваріанта: від'ємна кількість.
+
+Console.WriteLine("\n--- Перевірка неправильної кількості ---");
+
+int beforeFailure = changes;
+
+try
+{
+    service.AddLine(
+        created.Id,
+        "Монітор",
+        5000m,
+        -1);
+}
+catch (ArgumentException ex)
+{
+    Console.WriteLine($"Помилка: {ex.Message}");
+}
+
+Console.WriteLine(
+    $"Лічильник до/після: {beforeFailure}/{changes}");
+
+var afterFailure = service.Find(created.Id)!;
+
+Console.WriteLine(
+    $"Після відмови: позицій={afterFailure.LinesCount}; " +
+    $"сума={afterFailure.Total:F2} грн");
+
+// 7. Помилка пошуку: неіснуючий id.
+
+Console.WriteLine("\n--- Перевірка неіснуючого id ---");
+
+beforeFailure = changes;
+
+try
+{
+    service.Confirm("missing-order");
+}
+catch (InvalidOperationException ex)
+{
+    Console.WriteLine($"Помилка: {ex.Message}");
+}
+
+Console.WriteLine(
+    $"Лічильник до/після: {beforeFailure}/{changes}");
+
+// 8. Ще одна успішна операція.
+
+Console.WriteLine("\n--- Додавання третьої позиції ---");
+
+service.AddLine(
+    created.Id,
+    "Килимок",
+    200m,
+    1);
+
+Console.WriteLine($"\nПодій отримано: {changes}");
+
+// 9. Відписка першого підписника.
+
+service.Changed -= OnOrderChanged;
+
+Console.WriteLine("\n--- Журнал відписано. Підтвердження ---");
+
+service.Confirm(created.Id);
+
+// Тут працює тільки counterHandler.
+// Рядка [1: журнал] немає.
+// Запису OrderConfirmed у файлі журналу цього запуску немає.
+
+var confirmed = service.Find(created.Id)!;
+
+Console.WriteLine(
+    $"Підтверджено: {confirmed.IsConfirmed}; " +
+    $"позицій={confirmed.LinesCount}; " +
+    $"сума={confirmed.Total:F2} грн");
+
+Console.WriteLine($"Подій отримано: {changes}");
+
+// 10. Пошук із Func<Order, bool>.
+
+Console.WriteLine(
+    "\n--- Підтверджені замовлення із сумою від 1500 грн ---");
+
+var found = service.FindAll(
+    order => order.IsConfirmed && order.Total >= 1500m);
+
+foreach (var order in found)
+{
+    Console.WriteLine(
+        $"Id={order.Id}; " +
+        $"позицій={order.LinesCount}; " +
+        $"сума={order.Total:F2} грн");
+}
+
+// 11. Відписка другого підписника.
+
+service.Changed -= counterHandler;
+
+Console.WriteLine("\n--- Обох підписників відписано ---");
+
+var silent = service.Create();
+
+service.AddLine(
+    silent.Id,
+    "Блокнот",
+    100m,
+    1);
+
+var silentResult = service.Find(silent.Id)!;
+
+Console.WriteLine(
+    $"Без підписників створено замовлення: " +
+    $"позицій={silentResult.LinesCount}; " +
+    $"сума={silentResult.Total:F2} грн");
+
+Console.WriteLine(
+    $"Лічильник залишився: {changes}");

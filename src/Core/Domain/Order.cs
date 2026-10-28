@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Core.Dto;
 
 namespace Core.Domain;
@@ -10,142 +7,152 @@ public sealed class Order
     private readonly List<OrderLine> _lines = new();
 
     public string Id { get; }
-    public string CustomerId { get; }
 
-    public bool IsConfirmed { get; private set; }
+    public string CustomerName { get; }
 
-    public IReadOnlyList<OrderLine> Lines => _lines.AsReadOnly();
+    public DateTime CreatedAt { get; }
 
-    public decimal Total => _lines.Sum(line => line.Subtotal);
+    public OrderStatus Status { get; private set; }
 
-    private Order(string id, string customerId)
+    public IReadOnlyList<OrderLine> Lines =>
+        _lines.AsReadOnly();
+
+    public decimal Total =>
+        _lines.Sum(line => line.Total);
+
+    private Order(
+        string id,
+        string customerName,
+        DateTime createdAt)
     {
         Id = id;
-        CustomerId = customerId;
+        CustomerName = customerName;
+        CreatedAt = createdAt;
+        Status = OrderStatus.Draft;
     }
 
-    public static Order Create(string id, string customerId)
+    public static Order Create(
+        string id,
+        string customerName)
+    {
+        ValidateHeader(id, customerName);
+
+        return new Order(
+            id.Trim(),
+            customerName.Trim(),
+            DateTime.UtcNow);
+    }
+
+    private static void ValidateHeader(
+        string id,
+        string customerName)
     {
         if (string.IsNullOrWhiteSpace(id))
         {
             throw new ArgumentException(
-                "Номер замовлення не може бути порожнім.",
+                "Ідентифікатор замовлення не може бути порожнім.",
                 nameof(id));
         }
 
-        if (string.IsNullOrWhiteSpace(customerId))
+        if (string.IsNullOrWhiteSpace(customerName))
         {
             throw new ArgumentException(
-                "Ідентифікатор клієнта не може бути порожнім.",
-                nameof(customerId));
+                "Ім’я замовника не може бути порожнім.",
+                nameof(customerName));
         }
-
-        return new Order(id.Trim(), customerId.Trim());
     }
 
     public void AddLine(
-        string productId,
-        string name,
-        decimal price,
-        int quantity)
+        string productName,
+        int quantity,
+        decimal unitPrice)
     {
-        if (IsConfirmed)
+        if (Status != OrderStatus.Draft)
         {
             throw new InvalidOperationException(
-                $"Замовлення {Id} вже підтверджене. " +
-                "Додавати рядки не можна.");
+                "Не можна додавати товари до підтвердженого замовлення.");
         }
 
         OrderLine line = OrderLine.Create(
-            productId,
-            name,
-            price,
-            quantity);
-
-        if (line.Subtotal > decimal.MaxValue - Total)
-        {
-            throw new InvalidOperationException(
-                $"Додавання рядка перевищить допустиму суму " +
-                $"замовлення {Id}.");
-        }
+            productName,
+            quantity,
+            unitPrice);
 
         _lines.Add(line);
     }
 
     public void Confirm()
     {
-        if (IsConfirmed)
+        if (Status == OrderStatus.Confirmed)
         {
             throw new InvalidOperationException(
-                $"Замовлення {Id} вже підтверджене.");
+                "Замовлення вже підтверджено.");
         }
 
         if (_lines.Count == 0)
         {
             throw new InvalidOperationException(
-                $"Не можна підтвердити порожнє замовлення {Id}.");
+                "Не можна підтвердити замовлення без товарів.");
         }
 
-        IsConfirmed = true;
+        Status = OrderStatus.Confirmed;
     }
 
     public OrderDto ToDto()
     {
         var lines = _lines
-            .Select(line => line.ToDto())
-            .ToList()
-            .AsReadOnly();
+            .Select(line => new OrderLineDto(
+                line.ProductName,
+                line.Quantity,
+                line.UnitPrice))
+            .ToList();
 
         return new OrderDto(
             Id,
-            CustomerId,
-            IsConfirmed,
+            CustomerName,
+            CreatedAt,
+            Status,
             lines);
     }
 
     public static Order FromDto(OrderDto dto)
     {
-        if (dto is null)
+        ArgumentNullException.ThrowIfNull(dto);
+
+        ValidateHeader(dto.Id, dto.CustomerName);
+
+        if (!Enum.IsDefined(typeof(OrderStatus), dto.Status))
         {
-            throw new ArgumentNullException(nameof(dto));
+            throw new ArgumentException(
+                "Невідомий статус замовлення.");
         }
 
         if (dto.Lines is null)
         {
             throw new ArgumentException(
-                "Колекція рядків замовлення не може бути null.",
-                nameof(dto));
+                "Список рядків замовлення відсутній.");
         }
 
-        Order order = Create(dto.Id, dto.CustomerId);
+        var order = new Order(
+            dto.Id.Trim(),
+            dto.CustomerName.Trim(),
+            dto.CreatedAt);
 
-        foreach (OrderLineDto lineDto in dto.Lines)
+        foreach (var line in dto.Lines)
         {
-            OrderLine line = OrderLine.FromDto(lineDto);
+            ArgumentNullException.ThrowIfNull(line);
 
             order.AddLine(
-                line.ProductId,
-                line.Name,
-                line.Price,
-                line.Quantity);
+                line.ProductName,
+                line.Quantity,
+                line.UnitPrice);
         }
 
-        if (dto.IsConfirmed)
+        if (dto.Status == OrderStatus.Confirmed)
         {
-            
+            order.Confirm();
         }
 
         return order;
-    }
-
-    public override string ToString()
-    {
-        string status = IsConfirmed
-            ? "Підтверджене"
-            : "Чернетка";
-
-        return $"{Id}; клієнт: {CustomerId}; " +
-               $"статус: {status}; рядків: {Lines.Count}; " +
-               $"сума: {Total:F2} грн";
     }
 }

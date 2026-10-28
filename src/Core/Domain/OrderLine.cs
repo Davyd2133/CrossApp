@@ -1,101 +1,54 @@
-using System;
-using Core.Dto;
-
 namespace Core.Domain;
 
 public sealed class OrderLine
 {
-    public string ProductId { get; }
-    public string Name { get; }
-    public decimal Price { get; }
+    public string ProductName { get; }
+
     public int Quantity { get; }
 
-    public decimal Subtotal => Price * Quantity;
+    public decimal UnitPrice { get; }
+
+    public decimal Total => Quantity * UnitPrice;
 
     private OrderLine(
-        string productId,
-        string name,
-        decimal price,
-        int quantity)
+        string productName,
+        int quantity,
+        decimal unitPrice)
     {
-        ProductId = productId;
-        Name = name;
-        Price = price;
+        ProductName = productName;
         Quantity = quantity;
+        UnitPrice = unitPrice;
     }
 
     public static OrderLine Create(
-        string productId,
-        string name,
-        decimal price,
-        int quantity)
+        string productName,
+        int quantity,
+        decimal unitPrice)
     {
-        if (string.IsNullOrWhiteSpace(productId))
-        {
-            throw new ArgumentException(
-                "Ідентифікатор товару не може бути порожнім.",
-                nameof(productId));
-        }
-
-        if (string.IsNullOrWhiteSpace(name))
+        if (string.IsNullOrWhiteSpace(productName))
         {
             throw new ArgumentException(
                 "Назва товару не може бути порожньою.",
-                nameof(name));
-        }
-
-        if (price < 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(price),
-                price,
-                "Ціна не може бути від'ємною.");
+                nameof(productName));
         }
 
         if (quantity <= 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(quantity),
-                quantity,
                 "Кількість має бути більшою за нуль.");
         }
 
-        // Перевіряємо, що суму рядка можна представити як decimal.
-        if (price > decimal.MaxValue / quantity)
+        if (unitPrice < 0)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(price),
-                price,
-                "Сума рядка перевищує максимальне значення decimal.");
+                nameof(unitPrice),
+                "Ціна не може бути від’ємною.");
         }
 
         return new OrderLine(
-            productId.Trim(),
-            name.Trim(),
-            price,
-            quantity);
-    }
-
-    public OrderLineDto ToDto()
-    {
-        return new OrderLineDto(
-            ProductId,
-            Name,
-            Price,
-            Quantity);
-    }
-
-    public static OrderLine FromDto(OrderLineDto dto)
-    {
-        if (dto is null)
-        {
-            throw new ArgumentNullException(nameof(dto));
-        }
-
-        return Create(
-            dto.ProductId,
-            dto.Name,
-            dto.Price,
-            dto.Quantity);
+            productName.Trim(),
+            quantity,
+            unitPrice);
     }
 }
