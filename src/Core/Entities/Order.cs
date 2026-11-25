@@ -60,7 +60,7 @@ public sealed class Order
     {
         if (IsConfirmed)
         {
-            throw new InvalidOperationException(
+            throw new global::Core.DomainException(
                 "Замовлення вже підтверджено.");
         }
 

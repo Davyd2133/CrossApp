@@ -85,7 +85,7 @@ public sealed class Order
     {
         if (Status == OrderStatus.Confirmed)
         {
-            throw new InvalidOperationException(
+            throw new global::Core.DomainException(
                 "Замовлення вже підтверджено.");
         }
 
